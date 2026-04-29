@@ -7,3 +7,4 @@ __pycache__/
 htmlcov
 myenv/
 .coverage.MacBookPro*
+app.db

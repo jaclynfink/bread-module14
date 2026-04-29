@@ -1,5 +1,6 @@
 import os
 from collections.abc import Generator
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +12,19 @@ from app.models.calculation import Calculation
 from app.models.user import User
 from app.security import decode_access_token, verify_password
 from main import app
+
+
+def _register_and_get_auth_headers(api_client: TestClient) -> dict[str, str]:
+    suffix = uuid4().hex[:8]
+    payload = {
+        "username": f"pg_api_calc_{suffix}",
+        "email": f"pg_api_calc_{suffix}@example.com",
+        "password": "ValidPassword123",
+    }
+    register_response = api_client.post("/register", json=payload)
+    assert register_response.status_code == 201
+    token = register_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(scope="session")
@@ -89,9 +103,12 @@ def test_user_register_login_and_data_persisted_in_db(api_client: TestClient, ap
 
 @pytest.mark.integration
 def test_calculation_bread_create_read_update_delete(api_client: TestClient, api_db_session: Session) -> None:
+    headers = _register_and_get_auth_headers(api_client)
+
     create_response = api_client.post(
         "/calculations",
         json={"a": 10, "b": 5, "type": "Add"},
+        headers=headers,
     )
     assert create_response.status_code == 201
     created = create_response.json()
@@ -102,34 +119,38 @@ def test_calculation_bread_create_read_update_delete(api_client: TestClient, api
     assert persisted is not None
     assert persisted.result == 15
 
-    browse_response = api_client.get("/calculations")
+    browse_response = api_client.get("/calculations", headers=headers)
     assert browse_response.status_code == 200
     assert any(item["id"] == calc_id for item in browse_response.json())
 
-    read_response = api_client.get(f"/calculations/{calc_id}")
+    read_response = api_client.get(f"/calculations/{calc_id}", headers=headers)
     assert read_response.status_code == 200
     assert read_response.json()["id"] == calc_id
 
     update_response = api_client.put(
         f"/calculations/{calc_id}",
         json={"a": 9, "b": 3, "type": "Multiply"},
+        headers=headers,
     )
     assert update_response.status_code == 200
     assert update_response.json()["result"] == 27
 
-    delete_response = api_client.delete(f"/calculations/{calc_id}")
+    delete_response = api_client.delete(f"/calculations/{calc_id}", headers=headers)
     assert delete_response.status_code == 204
 
-    read_after_delete = api_client.get(f"/calculations/{calc_id}")
+    read_after_delete = api_client.get(f"/calculations/{calc_id}", headers=headers)
     assert read_after_delete.status_code == 404
     assert read_after_delete.json()["error"] == "Calculation not found."
 
 
 @pytest.mark.integration
 def test_calculation_invalid_payload_returns_error_response(api_client: TestClient) -> None:
+    headers = _register_and_get_auth_headers(api_client)
+
     invalid_type_response = api_client.post(
         "/calculations",
         json={"a": 10, "b": 2, "type": "Power"},
+        headers=headers,
     )
     assert invalid_type_response.status_code == 400
     assert "error" in invalid_type_response.json()
@@ -137,6 +158,7 @@ def test_calculation_invalid_payload_returns_error_response(api_client: TestClie
     divide_by_zero_response = api_client.post(
         "/calculations",
         json={"a": 10, "b": 0, "type": "Divide"},
+        headers=headers,
     )
     assert divide_by_zero_response.status_code == 400
     assert "error" in divide_by_zero_response.json()
@@ -144,10 +166,18 @@ def test_calculation_invalid_payload_returns_error_response(api_client: TestClie
     not_found_update_response = api_client.put(
         "/calculations/999999",
         json={"a": 1, "b": 1, "type": "Add"},
+        headers=headers,
     )
     assert not_found_update_response.status_code == 404
     assert not_found_update_response.json()["error"] == "Calculation not found."
 
-    invalid_path_response = api_client.get("/calculations/not-an-int")
+    invalid_path_response = api_client.get("/calculations/not-an-int", headers=headers)
     assert invalid_path_response.status_code == 400
     assert "error" in invalid_path_response.json()
+
+
+@pytest.mark.integration
+def test_calculation_endpoints_require_authentication(api_client: TestClient) -> None:
+    response = api_client.get("/calculations")
+    assert response.status_code == 401
+    assert response.json()["error"] == "Not authenticated."

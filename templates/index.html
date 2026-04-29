@@ -122,6 +122,28 @@
         .auth-links button {
             margin: 0 6px;
         }
+
+        .history {
+            margin: 28px auto 0;
+            max-width: 760px;
+            text-align: left;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 14px;
+            background: #ffffff;
+        }
+
+        .history ul {
+            padding-left: 20px;
+        }
+
+        .history li {
+            margin: 8px 0;
+        }
+
+        .history button {
+            margin-left: 8px;
+        }
     </style>
 </head>
 <body>
@@ -235,6 +257,13 @@
             This <div> is used to display the result of the arithmetic operation or any error messages.
         -->
     </div>
+
+    <div class="history">
+        <h3>My Saved Calculations</h3>
+        <p id="history-status">Log in to view calculation history.</p>
+        <button id="refresh-history" type="button">Refresh</button>
+        <ul id="history-list"></ul>
+    </div>
     
     <script>
         /*
@@ -255,6 +284,8 @@
             if (!userRaw || !token) {
                 authStatus.innerText = 'You are not logged in.';
                 logoutBtn.style.display = 'none';
+                setHistoryStatus('Log in to view calculation history.');
+                renderHistory([]);
                 return;
             }
 
@@ -262,11 +293,14 @@
                 const user = JSON.parse(userRaw);
                 authStatus.innerText = `Logged in as ${user.username}.`;
                 logoutBtn.style.display = 'inline-block';
+                loadCalculations();
             } catch {
                 localStorage.removeItem('current_user');
                 localStorage.removeItem('access_token');
                 authStatus.innerText = 'You are not logged in.';
                 logoutBtn.style.display = 'none';
+                setHistoryStatus('Log in to view calculation history.');
+                renderHistory([]);
             }
         }
 
@@ -275,6 +309,148 @@
             localStorage.removeItem('access_token');
             renderAuthState();
         });
+
+        document.getElementById('refresh-history').addEventListener('click', () => {
+            loadCalculations();
+        });
+
+        function setHistoryStatus(message) {
+            document.getElementById('history-status').innerText = message;
+        }
+
+        function renderHistory(items) {
+            const historyList = document.getElementById('history-list');
+            historyList.innerHTML = '';
+            for (const item of items) {
+                const row = document.createElement('li');
+                row.innerHTML = `#${item.id} — ${item.a} ${item.type} ${item.b}`;
+
+                const readBtn = document.createElement('button');
+                readBtn.type = 'button';
+                readBtn.innerText = 'Read';
+                readBtn.addEventListener('click', () => readCalculation(item.id));
+
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.innerText = 'Edit';
+                editBtn.addEventListener('click', () => editCalculation(item));
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.innerText = 'Delete';
+                deleteBtn.addEventListener('click', () => deleteCalculation(item.id));
+
+                row.appendChild(readBtn);
+                row.appendChild(editBtn);
+                row.appendChild(deleteBtn);
+                historyList.appendChild(row);
+            }
+        }
+
+        function getAuthHeaders() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                return null;
+            }
+            return {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+            };
+        }
+
+        async function loadCalculations() {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                setHistoryStatus('Log in to view calculation history.');
+                renderHistory([]);
+                return;
+            }
+
+            const response = await fetch('/calculations', {
+                method: 'GET',
+                headers,
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setHistoryStatus(data.error || 'Unable to load calculations.');
+                renderHistory([]);
+                return;
+            }
+
+            setHistoryStatus(`Loaded ${data.length} calculation(s).`);
+            renderHistory(data);
+        }
+
+        async function readCalculation(calculationId) {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                alert('Please log in first.');
+                return;
+            }
+
+            const response = await fetch(`/calculations/${calculationId}`, { headers });
+            const data = await response.json();
+            if (!response.ok) {
+                alert(data.error || 'Unable to read calculation.');
+                return;
+            }
+
+            alert(`Calculation #${data.id}: ${data.a} ${data.type} ${data.b}`);
+        }
+
+        async function deleteCalculation(calculationId) {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                alert('Please log in first.');
+                return;
+            }
+
+            const response = await fetch(`/calculations/${calculationId}`, {
+                method: 'DELETE',
+                headers,
+            });
+            if (!response.ok) {
+                const data = await response.json();
+                alert(data.error || 'Unable to delete calculation.');
+                return;
+            }
+
+            await loadCalculations();
+        }
+
+        async function editCalculation(item) {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                alert('Please log in first.');
+                return;
+            }
+
+            const newA = prompt('New value for a', String(item.a));
+            const newB = prompt('New value for b', String(item.b));
+            const newType = prompt('New type (Add, Sub, Multiply, Divide)', item.type);
+            if (newA === null || newB === null || newType === null) {
+                return;
+            }
+
+            const response = await fetch(`/calculations/${item.id}`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify({
+                    a: Number(newA),
+                    b: Number(newB),
+                    type: newType,
+                }),
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                alert(data.error || 'Unable to update calculation.');
+                return;
+            }
+
+            await loadCalculations();
+        }
 
         renderAuthState();
 
@@ -347,6 +523,22 @@
                         - resultElement.innerText: Updates the text inside the result <div> to display the result.
                     */
                     resultElement.innerText = 'Result: ' + data.result;
+                    const operationTypeMap = {
+                        add: 'Add',
+                        subtract: 'Sub',
+                        multiply: 'Multiply',
+                        divide: 'Divide',
+                    };
+                    const type = operationTypeMap[operation];
+                    const headers = getAuthHeaders();
+                    if (type && headers) {
+                        await fetch('/calculations', {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({ a, b, type }),
+                        });
+                        await loadCalculations();
+                    }
                 } else {
                     /*
                         Error Response Handling

@@ -2,6 +2,7 @@
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator  # Use @validator for Pydantic 1.x
 from fastapi.exceptions import RequestValidationError
@@ -14,9 +15,9 @@ from app.models.calculation import Calculation
 from app.models.user import User
 from app.operations.factory import CalculationFactory
 from app.operations import add, subtract, multiply, divide  # Ensure correct import path
-from app.schemas.calculation import CalculationCreate, CalculationRead
+from app.schemas.calculation import CalculationCreate, CalculationRead, CalculationUpdate
 from app.schemas.user import UserAuthResponse, UserCreate, UserLogin, UserRead
-from app.security import create_access_token, hash_password, verify_password
+from app.security import create_access_token, decode_access_token, hash_password, verify_password
 import uvicorn
 import logging
 
@@ -25,6 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+auth_scheme = HTTPBearer(auto_error=False)
 
 
 @app.on_event("startup")
@@ -106,6 +108,27 @@ def build_auth_response(user: User) -> UserAuthResponse:
         additional_claims={"username": user.username, "email": user.email},
     )
     return UserAuthResponse(access_token=token, user=UserRead.model_validate(user))
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(auth_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    """Validate bearer token and return the authenticated user."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+
+    try:
+        token_payload = decode_access_token(credentials.credentials)
+        user_id = int(token_payload.get("sub", ""))
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token.") from exc
+
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid authentication credentials.")
+
+    return user
 
 @app.post("/add", response_model=OperationResponse, responses={400: {"model": ErrorResponse}})
 async def add_route(operation: OperationRequest):
@@ -204,22 +227,38 @@ def login_user(payload: UserLogin, db: Session = Depends(get_db)):
 
 
 @app.get("/calculations", response_model=list[CalculationRead])
-def browse_calculations(db: Session = Depends(get_db)):
-    """Browse all persisted calculations."""
-    return db.query(Calculation).order_by(Calculation.id.asc()).all()
+def browse_calculations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Browse all calculations owned by the logged-in user."""
+    return (
+        db.query(Calculation)
+        .filter(Calculation.user_id == current_user.id)
+        .order_by(Calculation.id.asc())
+        .all()
+    )
 
 
 @app.get("/calculations/{calculation_id}", response_model=CalculationRead)
-def read_calculation(calculation_id: int, db: Session = Depends(get_db)):
+def read_calculation(
+    calculation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Read a single calculation by id."""
     calculation = db.get(Calculation, calculation_id)
-    if calculation is None:
+    if calculation is None or calculation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Calculation not found.")
     return calculation
 
 
 @app.post("/calculations", response_model=CalculationRead, status_code=status.HTTP_201_CREATED)
-def add_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
+def add_calculation(
+    payload: CalculationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Add a new calculation record."""
     result = payload.result
     if result is None:
@@ -230,7 +269,7 @@ def add_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
         b=payload.b,
         type=payload.type.value,
         result=result,
-        user_id=payload.user_id,
+        user_id=current_user.id,
     )
     db.add(calculation)
 
@@ -245,10 +284,15 @@ def add_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
 
 
 @app.put("/calculations/{calculation_id}", response_model=CalculationRead)
-def edit_calculation(calculation_id: int, payload: CalculationCreate, db: Session = Depends(get_db)):
+def edit_calculation(
+    calculation_id: int,
+    payload: CalculationCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Edit an existing calculation record using replacement payload data."""
     calculation = db.get(Calculation, calculation_id)
-    if calculation is None:
+    if calculation is None or calculation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Calculation not found.")
 
     result = payload.result
@@ -259,7 +303,54 @@ def edit_calculation(calculation_id: int, payload: CalculationCreate, db: Sessio
     calculation.b = payload.b
     calculation.type = payload.type.value
     calculation.result = result
-    calculation.user_id = payload.user_id
+    calculation.user_id = current_user.id
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to update calculation.") from exc
+
+    db.refresh(calculation)
+    return calculation
+
+
+@app.patch("/calculations/{calculation_id}", response_model=CalculationRead)
+def patch_calculation(
+    calculation_id: int,
+    payload: CalculationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Partially edit an existing calculation record."""
+    calculation = db.get(Calculation, calculation_id)
+    if calculation is None or calculation.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Calculation not found.")
+
+    if payload.a is None and payload.b is None and payload.type is None and payload.result is None:
+        raise HTTPException(status_code=400, detail="At least one field must be provided.")
+
+    merged_a = payload.a if payload.a is not None else calculation.a
+    merged_b = payload.b if payload.b is not None else calculation.b
+    merged_type = payload.type if payload.type is not None else calculation.type
+    merged_result = payload.result if payload.result is not None else None
+
+    try:
+        validated = CalculationCreate(
+            a=merged_a,
+            b=merged_b,
+            type=merged_type,
+            result=merged_result,
+            user_id=current_user.id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    calculation.a = validated.a
+    calculation.b = validated.b
+    calculation.type = validated.type.value
+    calculation.result = validated.result
+    calculation.user_id = current_user.id
 
     try:
         db.commit()
@@ -272,10 +363,14 @@ def edit_calculation(calculation_id: int, payload: CalculationCreate, db: Sessio
 
 
 @app.delete("/calculations/{calculation_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_calculation(calculation_id: int, db: Session = Depends(get_db)):
+def delete_calculation(
+    calculation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Delete a calculation by id."""
     calculation = db.get(Calculation, calculation_id)
-    if calculation is None:
+    if calculation is None or calculation.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Calculation not found.")
 
     db.delete(calculation)

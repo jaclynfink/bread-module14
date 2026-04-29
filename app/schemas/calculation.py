@@ -80,6 +80,37 @@ class CalculationCreate(CalculationBase):
         return self
 
 
+class CalculationUpdate(BaseModel):
+    """Schema for updating calculations."""
+
+    a: float | None = Field(default=None, description="Optional left operand")
+    b: float | None = Field(default=None, description="Optional right operand")
+    type: CalculationType | None = None
+    result: float | None = Field(default=None, description="Optional persisted result")
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: str | CalculationType | None) -> CalculationType | None:
+        if value is None:
+            return None
+        return CalculationBase.normalize_type(value)
+
+    @model_validator(mode="after")
+    def validate_operands_when_dividing(self) -> "CalculationUpdate":
+        if self.type == CalculationType.DIVIDE and self.b == 0:
+            raise ValueError("Division by zero is not allowed for type='Divide'.")
+
+        if self.result is not None and not isfinite(self.result):
+            raise ValueError("Result must be a finite number.")
+
+        if self.a is not None and not isfinite(self.a):
+            raise ValueError("Operands must be finite numbers.")
+        if self.b is not None and not isfinite(self.b):
+            raise ValueError("Operands must be finite numbers.")
+
+        return self
+
+
 class CalculationRead(CalculationBase):
     """Schema for exposing persisted calculations."""
 
