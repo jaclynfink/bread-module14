@@ -144,6 +144,65 @@
         .history button {
             margin-left: 8px;
         }
+
+        .bread-panel {
+            margin: 24px auto;
+            max-width: 960px;
+            text-align: left;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 14px;
+            background: #ffffff;
+        }
+
+        .bread-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .bread-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 10px;
+            background: #fafafa;
+        }
+
+        .bread-card h4 {
+            margin: 0 0 8px;
+        }
+
+        .bread-card label {
+            display: block;
+            font-size: 0.9rem;
+            margin-top: 6px;
+        }
+
+        .bread-card input,
+        .bread-card select,
+        .bread-card button {
+            width: 100%;
+            box-sizing: border-box;
+            margin: 4px 0 0;
+            padding: 7px;
+        }
+
+        .bread-feedback {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #1e3a8a;
+        }
+
+        .bread-feedback.error {
+            background: #fef2f2;
+            color: #991b1b;
+        }
+
+        .hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -264,17 +323,272 @@
         <button id="refresh-history" type="button">Refresh</button>
         <ul id="history-list"></ul>
     </div>
+
+    <div class="bread-panel">
+        <h3>Calculation BREAD Actions</h3>
+        <div class="bread-grid">
+            <form id="add-form" class="bread-card">
+                <h4>Add (Create)</h4>
+                <label for="add-a">A</label>
+                <input id="add-a" name="a" type="number" step="any" required>
+                <label for="add-b">B</label>
+                <input id="add-b" name="b" type="number" step="any" required>
+                <label for="add-type">Type</label>
+                <select id="add-type" name="type" required>
+                    <option value="Add">Add</option>
+                    <option value="Sub">Sub</option>
+                    <option value="Multiply">Multiply</option>
+                    <option value="Divide">Divide</option>
+                </select>
+                <button type="submit">Create</button>
+            </form>
+
+            <form id="read-form" class="bread-card">
+                <h4>Read</h4>
+                <label for="read-id">Calculation ID</label>
+                <input id="read-id" name="id" type="number" step="1" min="1" required>
+                <button type="submit">Get by ID</button>
+            </form>
+
+            <form id="edit-form" class="bread-card">
+                <h4>Edit</h4>
+                <label for="edit-id">Calculation ID</label>
+                <input id="edit-id" name="id" type="number" step="1" min="1" required>
+                <label for="edit-a">A</label>
+                <input id="edit-a" name="a" type="number" step="any" required>
+                <label for="edit-b">B</label>
+                <input id="edit-b" name="b" type="number" step="any" required>
+                <label for="edit-type">Type</label>
+                <select id="edit-type" name="type" required>
+                    <option value="Add">Add</option>
+                    <option value="Sub">Sub</option>
+                    <option value="Multiply">Multiply</option>
+                    <option value="Divide">Divide</option>
+                </select>
+                <button type="submit">Update (PUT)</button>
+            </form>
+
+            <form id="delete-form" class="bread-card">
+                <h4>Delete</h4>
+                <label for="delete-id">Calculation ID</label>
+                <input id="delete-id" name="id" type="number" step="1" min="1" required>
+                <button type="submit">Delete</button>
+            </form>
+        </div>
+
+        <div id="bread-feedback" class="bread-feedback hidden"></div>
+    </div>
     
     <script>
-        /*
-            <script> Section: JavaScript
-            
-            The <script> element allows you to embed JavaScript code directly within the HTML document.
-            JavaScript is a programming language that enables interactive and dynamic content on web pages.
-            In this example, JavaScript is used to handle calculator operations by sending requests to the server
-            and updating the page based on the server's response.
-        */
-        
+        const VALID_TYPES = ['Add', 'Sub', 'Multiply', 'Divide'];
+
+        function showBreadFeedback(message, isError = false) {
+            const feedback = document.getElementById('bread-feedback');
+            feedback.classList.remove('hidden');
+            feedback.classList.toggle('error', isError);
+            feedback.innerText = message;
+        }
+
+        function getAuthHeaders() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                return null;
+            }
+            return {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+            };
+        }
+
+        function ensureAuthHeaders() {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                showBreadFeedback('Please log in first.', true);
+                return null;
+            }
+            return headers;
+        }
+
+        function parseFiniteNumber(rawValue, fieldName) {
+            const value = Number(rawValue);
+            if (!Number.isFinite(value)) {
+                throw new Error(`${fieldName} must be a valid number.`);
+            }
+            return value;
+        }
+
+        function parsePositiveInt(rawValue, fieldName) {
+            const value = Number(rawValue);
+            if (!Number.isInteger(value) || value < 1) {
+                throw new Error(`${fieldName} must be a positive integer.`);
+            }
+            return value;
+        }
+
+        function validateCalculationPayload(payload) {
+            if (!VALID_TYPES.includes(payload.type)) {
+                throw new Error('Type must be one of: Add, Sub, Multiply, Divide.');
+            }
+            if (payload.type === 'Divide' && payload.b === 0) {
+                throw new Error('Cannot divide by zero.');
+            }
+        }
+
+        function setHistoryStatus(message) {
+            document.getElementById('history-status').innerText = message;
+        }
+
+        function fillEditForm(item) {
+            document.getElementById('edit-id').value = item.id;
+            document.getElementById('edit-a').value = item.a;
+            document.getElementById('edit-b').value = item.b;
+            document.getElementById('edit-type').value = item.type;
+        }
+
+        function fillReadDeleteForms(calculationId) {
+            document.getElementById('read-id').value = calculationId;
+            document.getElementById('delete-id').value = calculationId;
+        }
+
+        function renderHistory(items) {
+            const historyList = document.getElementById('history-list');
+            historyList.innerHTML = '';
+
+            for (const item of items) {
+                const row = document.createElement('li');
+                row.innerHTML = `#${item.id} — ${item.a} ${item.type} ${item.b}`;
+
+                const readBtn = document.createElement('button');
+                readBtn.type = 'button';
+                readBtn.innerText = 'Read';
+                readBtn.addEventListener('click', () => {
+                    fillReadDeleteForms(item.id);
+                    readCalculation(item.id);
+                });
+
+                const editBtn = document.createElement('button');
+                editBtn.type = 'button';
+                editBtn.innerText = 'Edit';
+                editBtn.addEventListener('click', () => {
+                    fillEditForm(item);
+                    showBreadFeedback(`Loaded calculation #${item.id} into Edit form.`);
+                });
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.type = 'button';
+                deleteBtn.innerText = 'Delete';
+                deleteBtn.addEventListener('click', () => {
+                    fillReadDeleteForms(item.id);
+                    deleteCalculation(item.id);
+                });
+
+                row.appendChild(readBtn);
+                row.appendChild(editBtn);
+                row.appendChild(deleteBtn);
+                historyList.appendChild(row);
+            }
+        }
+
+        async function loadCalculations() {
+            const headers = getAuthHeaders();
+            if (!headers) {
+                setHistoryStatus('Log in to view calculation history.');
+                renderHistory([]);
+                return;
+            }
+
+            const response = await fetch('/calculations', { method: 'GET', headers });
+            const data = await response.json();
+
+            if (!response.ok) {
+                setHistoryStatus(data.error || 'Unable to load calculations.');
+                renderHistory([]);
+                return;
+            }
+
+            setHistoryStatus(`Loaded ${data.length} calculation(s).`);
+            renderHistory(data);
+        }
+
+        async function createCalculation(payload) {
+            const headers = ensureAuthHeaders();
+            if (!headers) {
+                return;
+            }
+
+            const response = await fetch('/calculations', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to create calculation.');
+            }
+
+            await loadCalculations();
+            showBreadFeedback(`Created calculation #${data.id}.`);
+        }
+
+        async function readCalculation(calculationId) {
+            const headers = ensureAuthHeaders();
+            if (!headers) {
+                return;
+            }
+
+            const response = await fetch(`/calculations/${calculationId}`, { headers });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to read calculation.');
+            }
+
+            showBreadFeedback(`Read #${data.id}: a=${data.a}, b=${data.b}, type=${data.type}, result=${data.result}`);
+            fillEditForm(data);
+        }
+
+        async function updateCalculation(calculationId, payload) {
+            const headers = ensureAuthHeaders();
+            if (!headers) {
+                return;
+            }
+
+            const response = await fetch(`/calculations/${calculationId}`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Unable to update calculation.');
+            }
+
+            await loadCalculations();
+            showBreadFeedback(`Updated calculation #${data.id}.`);
+        }
+
+        async function deleteCalculation(calculationId) {
+            const headers = ensureAuthHeaders();
+            if (!headers) {
+                return;
+            }
+
+            const response = await fetch(`/calculations/${calculationId}`, {
+                method: 'DELETE',
+                headers,
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Unable to delete calculation.');
+            }
+
+            await loadCalculations();
+            showBreadFeedback(`Deleted calculation #${calculationId}.`);
+        }
+
         function renderAuthState() {
             const userRaw = localStorage.getItem('current_user');
             const token = localStorage.getItem('access_token');
@@ -308,259 +622,110 @@
             localStorage.removeItem('current_user');
             localStorage.removeItem('access_token');
             renderAuthState();
+            showBreadFeedback('Logged out.');
         });
 
         document.getElementById('refresh-history').addEventListener('click', () => {
             loadCalculations();
         });
 
-        function setHistoryStatus(message) {
-            document.getElementById('history-status').innerText = message;
-        }
-
-        function renderHistory(items) {
-            const historyList = document.getElementById('history-list');
-            historyList.innerHTML = '';
-            for (const item of items) {
-                const row = document.createElement('li');
-                row.innerHTML = `#${item.id} — ${item.a} ${item.type} ${item.b}`;
-
-                const readBtn = document.createElement('button');
-                readBtn.type = 'button';
-                readBtn.innerText = 'Read';
-                readBtn.addEventListener('click', () => readCalculation(item.id));
-
-                const editBtn = document.createElement('button');
-                editBtn.type = 'button';
-                editBtn.innerText = 'Edit';
-                editBtn.addEventListener('click', () => editCalculation(item));
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.type = 'button';
-                deleteBtn.innerText = 'Delete';
-                deleteBtn.addEventListener('click', () => deleteCalculation(item.id));
-
-                row.appendChild(readBtn);
-                row.appendChild(editBtn);
-                row.appendChild(deleteBtn);
-                historyList.appendChild(row);
+        document.getElementById('add-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            try {
+                const a = parseFiniteNumber(document.getElementById('add-a').value, 'A');
+                const b = parseFiniteNumber(document.getElementById('add-b').value, 'B');
+                const type = document.getElementById('add-type').value;
+                const payload = { a, b, type };
+                validateCalculationPayload(payload);
+                await createCalculation(payload);
+                event.target.reset();
+            } catch (error) {
+                showBreadFeedback(error.message, true);
             }
-        }
+        });
 
-        function getAuthHeaders() {
-            const token = localStorage.getItem('access_token');
-            if (!token) {
-                return null;
+        document.getElementById('read-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            try {
+                const calculationId = parsePositiveInt(document.getElementById('read-id').value, 'Calculation ID');
+                await readCalculation(calculationId);
+            } catch (error) {
+                showBreadFeedback(error.message, true);
             }
-            return {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-            };
-        }
+        });
 
-        async function loadCalculations() {
-            const headers = getAuthHeaders();
-            if (!headers) {
-                setHistoryStatus('Log in to view calculation history.');
-                renderHistory([]);
-                return;
+        document.getElementById('edit-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            try {
+                const calculationId = parsePositiveInt(document.getElementById('edit-id').value, 'Calculation ID');
+                const a = parseFiniteNumber(document.getElementById('edit-a').value, 'A');
+                const b = parseFiniteNumber(document.getElementById('edit-b').value, 'B');
+                const type = document.getElementById('edit-type').value;
+                const payload = { a, b, type };
+                validateCalculationPayload(payload);
+                await updateCalculation(calculationId, payload);
+            } catch (error) {
+                showBreadFeedback(error.message, true);
             }
+        });
 
-            const response = await fetch('/calculations', {
-                method: 'GET',
-                headers,
-            });
-            const data = await response.json();
-
-            if (!response.ok) {
-                setHistoryStatus(data.error || 'Unable to load calculations.');
-                renderHistory([]);
-                return;
+        document.getElementById('delete-form').addEventListener('submit', async (event) => {
+            event.preventDefault();
+            try {
+                const calculationId = parsePositiveInt(document.getElementById('delete-id').value, 'Calculation ID');
+                await deleteCalculation(calculationId);
+                event.target.reset();
+            } catch (error) {
+                showBreadFeedback(error.message, true);
             }
-
-            setHistoryStatus(`Loaded ${data.length} calculation(s).`);
-            renderHistory(data);
-        }
-
-        async function readCalculation(calculationId) {
-            const headers = getAuthHeaders();
-            if (!headers) {
-                alert('Please log in first.');
-                return;
-            }
-
-            const response = await fetch(`/calculations/${calculationId}`, { headers });
-            const data = await response.json();
-            if (!response.ok) {
-                alert(data.error || 'Unable to read calculation.');
-                return;
-            }
-
-            alert(`Calculation #${data.id}: ${data.a} ${data.type} ${data.b}`);
-        }
-
-        async function deleteCalculation(calculationId) {
-            const headers = getAuthHeaders();
-            if (!headers) {
-                alert('Please log in first.');
-                return;
-            }
-
-            const response = await fetch(`/calculations/${calculationId}`, {
-                method: 'DELETE',
-                headers,
-            });
-            if (!response.ok) {
-                const data = await response.json();
-                alert(data.error || 'Unable to delete calculation.');
-                return;
-            }
-
-            await loadCalculations();
-        }
-
-        async function editCalculation(item) {
-            const headers = getAuthHeaders();
-            if (!headers) {
-                alert('Please log in first.');
-                return;
-            }
-
-            const newA = prompt('New value for a', String(item.a));
-            const newB = prompt('New value for b', String(item.b));
-            const newType = prompt('New type (Add, Sub, Multiply, Divide)', item.type);
-            if (newA === null || newB === null || newType === null) {
-                return;
-            }
-
-            const response = await fetch(`/calculations/${item.id}`, {
-                method: 'PUT',
-                headers,
-                body: JSON.stringify({
-                    a: Number(newA),
-                    b: Number(newB),
-                    type: newType,
-                }),
-            });
-
-            if (!response.ok) {
-                const data = await response.json();
-                alert(data.error || 'Unable to update calculation.');
-                return;
-            }
-
-            await loadCalculations();
-        }
+        });
 
         renderAuthState();
 
         async function calculate(operation) {
-            /*
-                Function: calculate
-                
-                The 'calculate' function performs an arithmetic operation by sending a POST request
-                to the corresponding API endpoint. It retrieves the input values, sends them to the server,
-                and updates the result display based on the server's response.
-                
-                Parameters:
-                - operation (string): The arithmetic operation to perform ('add', 'subtract', 'multiply', 'divide').
-                
-                Steps:
-                1. Retrieve the values from the input fields with IDs 'a' and 'b'.
-                2. Parse the retrieved values to floating-point numbers.
-                3. Send a POST request to the server at the endpoint corresponding to the operation.
-                4. Await the server's response and parse it as JSON.
-                5. Log the response status and data to the console for debugging purposes.
-                6. If the response is successful (status code 200), display the result.
-                7. If the response indicates an error, display the error message.
-                8. Handle any network or unexpected errors by displaying an error message.
-            */
-            
-            // Retrieve the value of the first input field (ID: 'a') and parse it as a float
             const a = parseFloat(document.getElementById('a').value);
-            
-            // Retrieve the value of the second input field (ID: 'b') and parse it as a float
             const b = parseFloat(document.getElementById('b').value);
-            
-            // Get the <div> element where the result or error message will be displayed
             const resultElement = document.getElementById('result');
-    
+
+            const opTypeMap = {
+                add: 'Add',
+                subtract: 'Sub',
+                multiply: 'Multiply',
+                divide: 'Divide',
+            };
+            const mappedType = opTypeMap[operation];
+
             try {
-                /*
-                    Sending the POST Request
-                    
-                    - fetch('/' + operation, {...}): Sends a POST request to the server at the path corresponding
-                      to the operation (e.g., '/add', '/subtract').
-                      
-                    - method: 'POST': Specifies the HTTP method as POST, indicating that data is being sent to the server.
-                    
-                    - headers: { 'Content-Type': 'application/json' }: Sets the 'Content-Type' header to 'application/json',
-                      informing the server that the request body contains JSON data.
-                      
-                    - body: JSON.stringify({ a: a, b: b }): Converts the JavaScript object { a: a, b: b } into a JSON string
-                      to be sent in the request body.
-                */
+                if (!Number.isFinite(a) || !Number.isFinite(b)) {
+                    throw new Error('Please enter valid numeric values for A and B.');
+                }
+                if (mappedType === 'Divide' && b === 0) {
+                    throw new Error('Cannot divide by zero.');
+                }
+
                 const response = await fetch('/' + operation, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ a: a, b: b })
+                    body: JSON.stringify({ a, b })
                 });
-                
-                // Await and parse the response as JSON
+
                 const data = await response.json();
-                
-                // Log the response status and data to the browser's console for debugging
-                console.log('Response Status:', response.status);
-                console.log('Response Data:', data);
-                
-                if (response.ok) {
-                    /*
-                        Successful Response Handling
-                    
-                        - response.ok: A boolean indicating whether the HTTP status code is in the range 200-299,
-                          which means the request was successful.
-                          
-                        - resultElement.innerText: Updates the text inside the result <div> to display the result.
-                    */
-                    resultElement.innerText = 'Result: ' + data.result;
-                    const operationTypeMap = {
-                        add: 'Add',
-                        subtract: 'Sub',
-                        multiply: 'Multiply',
-                        divide: 'Divide',
-                    };
-                    const type = operationTypeMap[operation];
-                    const headers = getAuthHeaders();
-                    if (type && headers) {
-                        await fetch('/calculations', {
-                            method: 'POST',
-                            headers,
-                            body: JSON.stringify({ a, b, type }),
-                        });
-                        await loadCalculations();
-                    }
-                } else {
-                    /*
-                        Error Response Handling
-                    
-                        - If the response is not successful, it is expected to contain an 'error' field with
-                          a descriptive message.
-                          
-                        - resultElement.innerText: Updates the text inside the result <div> to display the error message.
-                    */
-                    resultElement.innerText = 'Error: ' + data.error;
+                if (!response.ok) {
+                    throw new Error(data.error || 'Calculation failed.');
+                }
+
+                resultElement.innerText = 'Result: ' + data.result;
+
+                const headers = getAuthHeaders();
+                if (mappedType && headers) {
+                    await fetch('/calculations', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ a, b, type: mappedType }),
+                    });
+                    await loadCalculations();
                 }
             } catch (error) {
-                /*
-                    Catch Block: Handling Network or Unexpected Errors
-                
-                    - Any errors that occur during the fetch operation (e.g., network issues) are caught here.
-                    
-                    - console.error: Logs the error to the browser's console for debugging.
-                    
-                    - resultElement.innerText: Updates the text inside the result <div> to display the error message.
-                */
-                console.error('Fetch error:', error);
                 resultElement.innerText = 'Error: ' + error.message;
             }
         }
