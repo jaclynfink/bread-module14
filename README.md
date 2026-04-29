@@ -5,6 +5,12 @@ A FastAPI project with a SQLAlchemy `User` model, Pydantic schemas, password has
 - **FastAPI** REST API
 - **JWT authentication** for registration and login
 - **Login and registration pages** for browser-based auth flow
+- **BREAD API**
+  - Browse: `GET /calculations`
+  - Read: `GET /calculations/{id}`
+  - Add: `POST /calculations`
+  - Edit: `PUT /calculations/{id}`
+  - Delete: `DELETE /calculations/{id}`
 - **Playwright** end-to-end browser testing
 - **SQLAlchemy** ORM user model
   - `username`
@@ -110,7 +116,7 @@ Run the Playwright end-to-end tests:
 pytest -q tests/e2e -m e2e
 ```
 
-These tests cover registration, login, invalid login, and front-end password validation.
+These tests cover registration/login plus calculation BREAD positive and negative scenarios (invalid input, unauthorized access, and not-found responses).
 
 ### API integration tests (Postgres-backed endpoint tests)
 
@@ -125,12 +131,13 @@ What this verifies:
 
 - User register and login endpoint flow
 - Password is hashed and stored in DB (not plain text)
-- Calculation BREAD flow:
+- BREAD API endpoints:
   - Add (POST /calculations)
   - Browse (GET /calculations)
   - Read (GET /calculations/{id})
   - Edit (PUT /calculations/{id})
   - Delete (DELETE /calculations/{id})
+- Unauthorized calls to calculation endpoints return `401`
 - Invalid payloads return expected error status codes and error JSON fields
 
 ### Run integration tests in CI-style mode locally
@@ -180,7 +187,7 @@ uvicorn main:app --reload
   {
     "username": "manual_user",
     "email": "manual_user@example.com",
-    "password": "StrongPass123"
+    "password": "ValidPassword123"
   }
 
 3. Confirm response code is 201 and response includes id, username, email, created_at.
@@ -189,7 +196,7 @@ uvicorn main:app --reload
 
   {
     "username": "manual_user",
-    "password": "StrongPass123"
+    "password": "ValidPassword123"
   }
 
 6. Confirm response code is 200 and response contains message plus user object.
@@ -232,6 +239,7 @@ uvicorn main:app --reload
 
 - POST /calculations with invalid type (for example type: "Power") should return 400.
 - POST /calculations with Divide and b=0 should return 400.
+- GET /calculations without Bearer token should return 401.
 - POST /users/login with wrong password should return 401.
 
 ---
